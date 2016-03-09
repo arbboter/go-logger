@@ -72,7 +72,11 @@ func Init(appName string, logLevel LEVEL) {
 	//第三个参数为备份文件最大数量
 	//第四个参数为备份文件大小
 	//第五个参数为文件大小的单位
-	SetRollingFile("/data/applog/"+appName, appName+".log", 50, 20, MB)
+	DefaultDir := "/data/applog/"
+	if runtime.GOOS == "windows" {
+		DefaultDir = "." + DefaultDir
+	}
+	SetRollingFile(DefaultDir+appName, appName+".log", 50, 20, MB)
 
 	//指定日志文件备份方式为日期的方式
 	//第一个参数为日志文件存放目录
@@ -180,13 +184,13 @@ func logLevelName(lv LEVEL) string {
 }
 
 // 日志信息
-func getLineInfo(levelName string) string {
+func getLineInfo(levelName string, calldepth int) string {
 	var buffer bytes.Buffer
 
 	tNow := time.Now()
 	buffer.WriteString(tNow.Format("[2006-01-02 15:04:05.999]"))
 	buffer.WriteString(fmt.Sprintf(" [PID:%v] #%v# ", os.Getpid(), levelName))
-	funcName, file, line, ok := runtime.Caller(3)
+	funcName, file, line, ok := runtime.Caller(calldepth)
 	if ok {
 		buffer.WriteString(fmt.Sprintf("FILE:%v LN:%v FUNC:%v", path.Base(file), line, runtime.FuncForPC(funcName).Name()))
 	} else {
@@ -208,7 +212,7 @@ func logByLevelln(lv LEVEL, v ...interface{}) {
 
 	if logLevel <= lv {
 		var buffer bytes.Buffer
-		buffer.WriteString(fmt.Sprintf("%v EM:", getLineInfo(logLevelName(lv))))
+		buffer.WriteString(fmt.Sprintf("%v EM:", getLineInfo(logLevelName(lv), 3)))
 		buffer.WriteString(fmt.Sprint(v...))
 		if logObj != nil {
 			logObj.lg.Print(buffer.String())
@@ -230,7 +234,7 @@ func logByLevelf(lv LEVEL, arg string, v ...interface{}) {
 
 	if logLevel <= lv {
 		var buffer bytes.Buffer
-		buffer.WriteString(fmt.Sprintf("%v EM:", getLineInfo(logLevelName(lv))))
+		buffer.WriteString(fmt.Sprintf("%v EM:", getLineInfo(logLevelName(lv), 3)))
 		buffer.WriteString(fmt.Sprintf(arg, v...))
 		if logObj != nil {
 			logObj.lg.Print(buffer.String())
@@ -257,6 +261,21 @@ func Fatal(v ...interface{}) {
 }
 func Key(v ...interface{}) {
 	logByLevelln(KEY, v...)
+}
+func Header() {
+	var buffer bytes.Buffer
+
+	funcName, _, _, ok := runtime.Caller(1)
+	buffer.WriteString("\n======== ")
+	if ok {
+		buffer.WriteString(fmt.Sprintf("%v ", runtime.FuncForPC(funcName).Name()))
+	} else {
+		buffer.WriteString("nil ")
+	}
+
+	tNow := time.Now()
+	buffer.WriteString(tNow.Format("REQUEST START cptime:[2006-01-02 15:04:05.999] ========"))
+	logObj.lg.Print(buffer.String())
 }
 
 // 格式化日志
