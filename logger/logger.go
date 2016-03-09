@@ -1,9 +1,11 @@
 package logger
 
 import (
+	"bytes"
 	"fmt"
 	"log"
 	"os"
+	"path"
 	"runtime"
 	"strconv"
 	"sync"
@@ -11,7 +13,7 @@ import (
 )
 
 const (
-	_VER string = "1.0.2"
+	_VER string = "1.0.3"
 )
 
 type LEVEL int32
@@ -23,6 +25,7 @@ var dailyRolling bool = true
 var consoleAppender bool = true
 var RollingFile bool = false
 var logObj *_FILE
+var logFlag = 0
 
 const DATEFORMAT = "2006-01-02"
 
@@ -43,6 +46,7 @@ const (
 	WARN
 	ERROR
 	FATAL
+	KEY
 	OFF
 )
 
@@ -57,6 +61,30 @@ type _FILE struct {
 	lg       *log.Logger
 }
 
+func Init(appName string, logLevel LEVEL) {
+	runtime.GOMAXPROCS(runtime.NumCPU())
+
+	//指定是否控制台打印，默认为true
+	SetConsole(false)
+	//指定日志文件备份方式为文件大小的方式
+	//第一个参数为日志文件存放目录
+	//第二个参数为日志文件命名
+	//第三个参数为备份文件最大数量
+	//第四个参数为备份文件大小
+	//第五个参数为文件大小的单位
+	SetRollingFile("/data/applog/"+appName, appName+".log", 50, 20, MB)
+
+	//指定日志文件备份方式为日期的方式
+	//第一个参数为日志文件存放目录
+	//第二个参数为日志文件命名
+	//logger.SetRollingDaily("F:/data/applog/main_test", "main_test.log")
+
+	//指定日志级别  ALL，DEBUG，INFO，WARN，ERROR，FATAL，OFF 级别由低到高
+	//一般习惯是测试阶段为debug，生成环境为info以上
+	SetLevel(logLevel)
+
+}
+
 func SetConsole(isConsole bool) {
 	consoleAppender = isConsole
 }
@@ -66,6 +94,12 @@ func SetLevel(_level LEVEL) {
 }
 
 func SetRollingFile(fileDir, fileName string, maxNumber int32, maxSize int64, _unit UNIT) {
+	// Make Sure Dir Exist
+	err := os.MkdirAll(fileDir, 0777)
+	if err != nil {
+		log.Printf("Create Dir Failed. Dir:%v\n", fileDir)
+	}
+
 	maxFileCount = maxNumber
 	maxFileSize = maxSize * int64(_unit)
 	RollingFile = true
@@ -82,7 +116,7 @@ func SetRollingFile(fileDir, fileName string, maxNumber int32, maxSize int64, _u
 	}
 	if !logObj.isMustRename() {
 		logObj.logfile, _ = os.OpenFile(fileDir+"/"+fileName, os.O_RDWR|os.O_APPEND|os.O_CREATE, 0666)
-		logObj.lg = log.New(logObj.logfile, "", log.Ldate|log.Ltime|log.Lshortfile)
+		logObj.newLogFile()
 	} else {
 		logObj.rename()
 	}
@@ -99,7 +133,7 @@ func SetRollingDaily(fileDir, fileName string) {
 
 	if !logObj.isMustRename() {
 		logObj.logfile, _ = os.OpenFile(fileDir+"/"+fileName, os.O_RDWR|os.O_APPEND|os.O_CREATE, 0666)
-		logObj.lg = log.New(logObj.logfile, "", log.Ldate|log.Ltime|log.Lshortfile)
+		logObj.newLogFile()
 	} else {
 		logObj.rename()
 	}
@@ -126,87 +160,123 @@ func catchError() {
 	}
 }
 
-func Debug(v ...interface{}) {
+func logLevelName(lv LEVEL) string {
+	switch lv {
+	case DEBUG:
+		return "DEG"
+	case INFO:
+		return "INF"
+	case WARN:
+		return "WRN"
+	case ERROR:
+		return "ERR"
+	case FATAL:
+		return "FAT"
+	case KEY:
+		return "KEY"
+	default:
+		return "LOG"
+	}
+}
+
+// 日志信息
+func getLineInfo(levelName string) string {
+	var buffer bytes.Buffer
+
+	tNow := time.Now()
+	buffer.WriteString(tNow.Format("[2006-01-02 15:04:05.999]"))
+	buffer.WriteString(fmt.Sprintf(" [PID:%v] #%v# ", os.Getpid(), levelName))
+	funcName, file, line, ok := runtime.Caller(3)
+	if ok {
+		buffer.WriteString(fmt.Sprintf("FILE:%v LN:%v FUNC:%v", path.Base(file), line, runtime.FuncForPC(funcName).Name()))
+	} else {
+		buffer.WriteString("FILE:nil LN:nil FUNC:nil")
+	}
+	return buffer.String()
+}
+
+func logByLevelln(lv LEVEL, v ...interface{}) {
 	if dailyRolling {
 		fileCheck()
 	}
+
 	defer catchError()
 	if logObj != nil {
 		logObj.mu.RLock()
 		defer logObj.mu.RUnlock()
 	}
 
-	if logLevel <= DEBUG {
+	if logLevel <= lv {
+		var buffer bytes.Buffer
+		buffer.WriteString(fmt.Sprintf("%v EM:", getLineInfo(logLevelName(lv))))
+		buffer.WriteString(fmt.Sprint(v...))
 		if logObj != nil {
-			logObj.lg.Output(2, fmt.Sprintln("debug", v))
+			logObj.lg.Print(buffer.String())
 		}
-		console("debug", v)
+		console(buffer.String())
 	}
+}
+
+func logByLevelf(lv LEVEL, arg string, v ...interface{}) {
+	if dailyRolling {
+		fileCheck()
+	}
+
+	defer catchError()
+	if logObj != nil {
+		logObj.mu.RLock()
+		defer logObj.mu.RUnlock()
+	}
+
+	if logLevel <= lv {
+		var buffer bytes.Buffer
+		buffer.WriteString(fmt.Sprintf("%v EM:", getLineInfo(logLevelName(lv))))
+		buffer.WriteString(fmt.Sprintf(arg, v...))
+		if logObj != nil {
+			logObj.lg.Print(buffer.String())
+		}
+		console(buffer.String())
+	}
+}
+
+// 行输出日志
+func Debug(v ...interface{}) {
+	logByLevelln(DEBUG, v...)
 }
 func Info(v ...interface{}) {
-	if dailyRolling {
-		fileCheck()
-	}
-	defer catchError()
-	if logObj != nil {
-		logObj.mu.RLock()
-		defer logObj.mu.RUnlock()
-	}
-	if logLevel <= INFO {
-		if logObj != nil {
-			logObj.lg.Output(2, fmt.Sprintln("info", v))
-		}
-		console("info", v)
-	}
+	logByLevelln(INFO, v...)
 }
 func Warn(v ...interface{}) {
-	if dailyRolling {
-		fileCheck()
-	}
-	defer catchError()
-	if logObj != nil {
-		logObj.mu.RLock()
-		defer logObj.mu.RUnlock()
-	}
-
-	if logLevel <= WARN {
-		if logObj != nil {
-			logObj.lg.Output(2, fmt.Sprintln("warn", v))
-		}
-		console("warn", v)
-	}
+	logByLevelln(WARN, v...)
 }
 func Error(v ...interface{}) {
-	if dailyRolling {
-		fileCheck()
-	}
-	defer catchError()
-	if logObj != nil {
-		logObj.mu.RLock()
-		defer logObj.mu.RUnlock()
-	}
-	if logLevel <= ERROR {
-		if logObj != nil {
-			logObj.lg.Output(2, fmt.Sprintln("error", v))
-		}
-		console("error", v)
-	}
+	logByLevelln(ERROR, v...)
 }
 func Fatal(v ...interface{}) {
-	if dailyRolling {
-		fileCheck()
-	}
-	defer catchError()
-	if logObj != nil {
-		logObj.mu.RLock()
-		defer logObj.mu.RUnlock()
-	}
-	if logLevel <= FATAL {
-		if logObj != nil {
-			logObj.lg.Output(2, fmt.Sprintln("fatal", v))
-		}
-		console("fatal", v)
-	}
+	logByLevelln(FATAL, v...)
+}
+func Key(v ...interface{}) {
+	logByLevelln(KEY, v...)
+}
+
+// 格式化日志
+func Debugf(arg string, v ...interface{}) {
+	logByLevelf(DEBUG, arg, v...)
+}
+func Infof(arg string, v ...interface{}) {
+	logByLevelf(INFO, arg, v...)
+}
+func Warnf(arg string, v ...interface{}) {
+	logByLevelf(WARN, arg, v...)
+}
+func Errorf(arg string, v ...interface{}) {
+	logByLevelf(ERROR, arg, v...)
+}
+func Fatalf(arg string, v ...interface{}) {
+	logByLevelf(FATAL, arg, v...)
+}
+func Keyf(arg string, v ...interface{}) {
+	logByLevelf(KEY, arg, v...)
 }
 
 func (f *_FILE) isMustRename() bool {
@@ -225,6 +295,10 @@ func (f *_FILE) isMustRename() bool {
 	return false
 }
 
+func (f *_FILE) newLogFile() {
+	f.lg = log.New(logObj.logfile, "", logFlag)
+}
+
 func (f *_FILE) rename() {
 	if dailyRolling {
 		fn := f.dir + "/" + f.filename + "." + f._date.Format(DATEFORMAT)
@@ -239,7 +313,7 @@ func (f *_FILE) rename() {
 			t, _ := time.Parse(DATEFORMAT, time.Now().Format(DATEFORMAT))
 			f._date = &t
 			f.logfile, _ = os.Create(f.dir + "/" + f.filename)
-			f.lg = log.New(logObj.logfile, "\n", log.Ldate|log.Ltime|log.Lshortfile)
+			f.lg = log.New(logObj.logfile, "[ ", logFlag)
 		}
 	} else {
 		f.coverNextOne()
@@ -250,21 +324,42 @@ func (f *_FILE) nextSuffix() int {
 	return int(f._suffix%int(maxFileCount) + 1)
 }
 
+// 滚动日志文件，返回受影响的文件数目
+func (f *_FILE) rollLogFile() int {
+	var moveNum int = 0
+
+	// Del End File
+	endFile := f.dir + "/" + f.filename + "." + strconv.Itoa(int(maxFileCount))
+	if isExist(endFile) {
+		os.Remove(endFile)
+		moveNum += 1
+	}
+	for i := int(maxFileCount) - 1; i > 0; i-- {
+		// Move File i->i+1
+		if isExist(f.dir + "/" + f.filename + "." + strconv.Itoa(i)) {
+			srcName := f.dir + "/" + f.filename + "." + strconv.Itoa(i)
+			dstName := f.dir + "/" + f.filename + "." + strconv.Itoa(i+1)
+			os.Rename(srcName, dstName)
+			moveNum += 1
+		}
+	}
+	return moveNum
+}
+
 func (f *_FILE) coverNextOne() {
-	f._suffix = f.nextSuffix()
+	f._suffix = 1
 	if f.logfile != nil {
 		f.logfile.Close()
 	}
-	if isExist(f.dir + "/" + f.filename + "." + strconv.Itoa(int(f._suffix))) {
-		os.Remove(f.dir + "/" + f.filename + "." + strconv.Itoa(int(f._suffix)))
-	}
+
+	f.rollLogFile()
 	os.Rename(f.dir+"/"+f.filename, f.dir+"/"+f.filename+"."+strconv.Itoa(int(f._suffix)))
+
 	f.logfile, _ = os.Create(f.dir + "/" + f.filename)
-	f.lg = log.New(logObj.logfile, "\n", log.Ldate|log.Ltime|log.Lshortfile)
+	f.newLogFile()
 }
 
 func fileSize(file string) int64 {
-	fmt.Println("fileSize", file)
 	f, e := os.Stat(file)
 	if e != nil {
 		fmt.Println(e.Error())
