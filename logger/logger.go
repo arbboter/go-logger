@@ -8,6 +8,7 @@ import (
 	"path"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -155,6 +156,7 @@ func (f *_FILE) Print(lv LEVEL, v ...interface{}) {
 
 	// 写日志
 	f.lg.Print(v...)
+	fmt.Println(v...)
 
 	// 调用更低层写日志
 	lowerLevel := f.logLevel - 1
@@ -358,16 +360,26 @@ func catchError() {
 	}
 }
 
+func getSimpleName(fname string) string {
+	s := strings.Split(fname, ".")
+	sepNum := len(s)
+	if sepNum > 0 {
+		return s[sepNum-1]
+	}
+	return fname
+}
+
 // 日志信息
 func getLineInfo(levelName string, calldepth int) string {
 	var buffer bytes.Buffer
 
 	tNow := time.Now()
-	buffer.WriteString(tNow.Format("[2006-01-02 15:04:05.999]"))
+	buffer.WriteString(tNow.Format("[2006-01-02 15:04:05.000]"))
 	buffer.WriteString(fmt.Sprintf(" [PID:%v] #%v# ", os.Getpid(), levelName))
 	funcName, file, line, ok := runtime.Caller(calldepth)
 	if ok {
-		buffer.WriteString(fmt.Sprintf("FILE:%v LN:%v FUNC:%v", path.Base(file), line, runtime.FuncForPC(funcName).Name()))
+		simpleFuncName := getSimpleName(runtime.FuncForPC(funcName).Name())
+		buffer.WriteString(fmt.Sprintf("FILE:%v LN:%v FUNC:%v", path.Base(file), line, simpleFuncName))
 	} else {
 		buffer.WriteString("FILE:nil LN:nil FUNC:nil")
 	}
