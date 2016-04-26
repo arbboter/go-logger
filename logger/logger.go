@@ -26,7 +26,7 @@ var maxFileCount int32
 var consoleAppender bool = true
 var logSet [OFF]*_FILE
 var logFlag = 0
-var modeDebug = true
+var modeDebug = false
 var ModuleInit = false
 
 const DATEFORMAT = "2006-01-02"
@@ -142,21 +142,21 @@ func (f *_FILE) Print(lv LEVEL, v ...interface{}) {
 	if f.lg == nil {
 		// 文件未打开
 		f.openWriteLogFile()
+		fmt.Printf("Try to open log file\n")
 	} else if f.lg != nil && isExist(f.logFileName()) == false {
 		// 文件丢失
-		if f.logfile != nil {
-			f.logfile.Close()
-			f.logfile = nil
-		}
+		f.closeLogFile()
 		f.openWriteLogFile()
+		fmt.Printf("Log File Miss\n")
 	} else if f.isMustRename() {
 		// 是否需要重命名
 		f.rename()
+		fmt.Printf("Rename Log File\n")
 	}
 
 	// 写日志
 	f.lg.Print(v...)
-	fmt.Println(v...)
+	//fmt.Println(v...)
 
 	// 调用更低层写日志
 	lowerLevel := f.logLevel - 1
@@ -210,9 +210,18 @@ func (f *_FILE) openWriteLogFile() {
 
 	if err != nil {
 		fmt.Println("open file failed:", logName)
+		return
 	}
 	f.logfile = lf
 	f.lg = log.New(f.logfile, "", logFlag)
+}
+
+func (f *_FILE) closeLogFile() {
+	if f.logfile != nil {
+		f.logfile.Close()
+		f.logfile = nil
+		f.lg = nil
+	}
 }
 
 func (f *_FILE) rename() {
@@ -220,7 +229,7 @@ func (f *_FILE) rename() {
 		fn := f.dir + "/" + f.filename + "." + f._date.Format(DATEFORMAT)
 		if !isExist(fn) && f.isMustRename() {
 			if f.logfile != nil {
-				f.logfile.Close()
+				f.closeLogFile()
 			}
 			err := os.Rename(f.dir+"/"+f.filename, fn)
 			if err != nil {
@@ -228,7 +237,11 @@ func (f *_FILE) rename() {
 			}
 			t, _ := time.Parse(DATEFORMAT, time.Now().Format(DATEFORMAT))
 			f._date = &t
-			f.logfile, _ = os.Create(f.dir + "/" + f.filename)
+			f.logfile, err = os.Create(f.dir + "/" + f.filename)
+			if err != nil {
+				fmt.Println("open file failed:", f.dir+"/"+f.filename)
+				return
+			}
 			f.lg = log.New(f.logfile, "", logFlag)
 		}
 	} else if f.typeRoll == TypeRollHour {
@@ -271,21 +284,17 @@ func (f *_FILE) indexFile(idx int) string {
 }
 
 func (f *_FILE) coverNextOne() {
+	// 关闭当前文件
 	f._suffix = 1
-	if f.logfile != nil {
-		f.logfile.Close()
-		f.logfile = nil
-		f.lg = nil
-	}
+	f.closeLogFile()
 
+	// 移动文件
 	f.rollLogFile()
 
-	f.logfile.Close()
+	// 移动当前文件到下一个文件
 	os.Rename(f.logFileName(), f.indexFile(f._suffix))
-	// 因为原文件已被重命名，所以需要关闭原来的文件句柄，重新打开
-	f.logfile = nil
-	f.lg = nil
 
+	// 打开当前输出文件
 	f.openWriteLogFile()
 }
 
@@ -443,7 +452,8 @@ func Header() {
 	funcName, _, _, ok := runtime.Caller(1)
 	buffer.WriteString("\n======== ")
 	if ok {
-		buffer.WriteString(fmt.Sprintf("%v ", runtime.FuncForPC(funcName).Name()))
+		funName := getSimpleName(runtime.FuncForPC(funcName).Name())
+		buffer.WriteString(fmt.Sprintf("%v ", funName))
 	} else {
 		buffer.WriteString("nil ")
 	}
